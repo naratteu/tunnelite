@@ -1,6 +1,9 @@
 ﻿#nullable disable
+using MessagePack;
+
 namespace Tunnelite.Sdk;
 
+[MessagePackObject(keyAsPropertyName: true)]
 public class TcpTunnelResponse
 {
     public string TunnelUrl { get; set; }

@@ -26,9 +26,23 @@
 		</None>
 	</ItemGroup>
 
+	<!--
+		Regenerates Serialization/Generated/MessagePackFormatters.g.cs from the [MessagePackObject]
+		types in this project. Run it after adding or changing a type that travels over the hub:
+
+			dotnet tool restore
+			dotnet build src/Tunnelite.Sdk -t:GenerateMessagePackFormatters
+
+		The generated formatters are checked in so a normal build needs neither the tool nor this target.
+	-->
+	<Target Name="GenerateMessagePackFormatters">
+		<Exec Command="dotnet mpc -i &quot;$(MSBuildProjectFullPath)&quot; -o &quot;$(MSBuildProjectDirectory)/Serialization/Generated/MessagePackFormatters.g.cs&quot;"
+		      WorkingDirectory="$(MSBuildProjectDirectory)" />
+	</Target>
+
 	<ItemGroup>
-		<PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.10" />
-		<PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="8.0.10" />
+		<PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="8.0.31" />
+		<PackageReference Include="Microsoft.AspNetCore.SignalR.Protocols.MessagePack" Version="8.0.31" />
 		<PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
 	</ItemGroup>
 

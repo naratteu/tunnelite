@@ -35,7 +35,10 @@ public class TcpTunnelClient : ITunnelClient
 
         Connection = new HubConnectionBuilder()
             .WithUrl($"{Tunnel.PublicUrl}/wsstcptunnel?clientId={tunnel.ClientId}")
-            .AddMessagePackProtocol()
+            .AddMessagePackProtocol(options =>
+            {
+                options.SerializerOptions = options.SerializerOptions.WithResolver(TunneliteResolver.Instance);
+            })
             .ConfigureLogging(logging =>
             {
                 if (logLevel.HasValue)
@@ -146,7 +149,7 @@ public class TcpTunnelClient : ITunnelClient
     {
         try
         {
-            var incomingTcpStream = Connection.StreamAsync<ReadOnlyMemory<byte>>("StreamIncomingAsync", tcpConnection, cancellationToken: cancellationToken);
+            var incomingTcpStream = Connection.StreamAsync<byte[]>("StreamIncomingAsync", tcpConnection, cancellationToken: cancellationToken);
 
             var localTcpStream = localClient.GetStream();
 
@@ -178,7 +181,7 @@ public class TcpTunnelClient : ITunnelClient
         await Connection.InvokeAsync("StreamOutgoingAsync", StreamLocalTcpAsync(localClient, tcpConnection, cancellationToken), tcpConnection, cancellationToken: cancellationToken);
     }
 
-    private async IAsyncEnumerable<ReadOnlyMemory<byte>> StreamLocalTcpAsync(TcpClient localClient, TcpConnection tcpConnection, [EnumeratorCancellation] CancellationToken cancellationToken)
+    private async IAsyncEnumerable<byte[]> StreamLocalTcpAsync(TcpClient localClient, TcpConnection tcpConnection, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         const int chunkSize = 16 * 1024;
 
@@ -192,7 +195,7 @@ public class TcpTunnelClient : ITunnelClient
             while (!cancellationToken.IsCancellationRequested &&
                 (bytesRead = await tcpStream.ReadAsync(buffer, cancellationToken)) > 0)
             {
-                yield return new ReadOnlyMemory<byte>(buffer, 0, bytesRead);
+                yield return buffer[..bytesRead];
             }
         }
         finally
