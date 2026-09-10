@@ -8,111 +8,85 @@ on:
 permissions:
   contents: read
 
+env:
+  # StuDev.AotAnywhere cross-compiles all of these from a single runner.
+  RIDS: linux-x64 linux-arm64 linux-musl-x64 osx-x64 osx-arm64 win-x64 win-arm64
+
 jobs:
-  build:
-    name: ${{ matrix.rid }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # NativeAOT cannot cross-compile, so every RID needs a runner of its own.
-          - { os: ubuntu-latest,    rid: linux-x64 }
-          - { os: ubuntu-24.04-arm, rid: linux-arm64 }
-          - { os: macos-13,         rid: osx-x64 }
-          - { os: macos-latest,     rid: osx-arm64 }
-          - { os: windows-latest,   rid: win-x64 }
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.x'
-
-      - name: Publish
-        shell: bash
-        # InvariantGlobalization keeps the binary from requiring ICU at runtime: without it
-        # a Linux build dies on any image that has no libicu installed, which is most slim
-        # images. It is set here rather than in the csproj so the dotnet tool package keeps
-        # its current behaviour.
-        run: >
-          dotnet publish src/Tunnelite.Client
-          -c Release
-          -r ${{ matrix.rid }}
-          -p:PublishAot=true
-          -p:InvariantGlobalization=true
-          -o publish
-
-      - name: Stage
-        shell: bash
-        run: |
-          set -euo pipefail
-          staging="staging/tunnelite-${{ matrix.rid }}"
-          mkdir -p "$staging" dist
-          # The binary is renamed rather than built as "tunnelite": passing
-          # -p:AssemblyName to the publish above makes the AOT link fail with
-          # "Failed to load type 'Tunnelite.Sdk.ITunnelClient'".
-          if [ -f publish/Tunnelite.Client.exe ]; then
-            cp publish/Tunnelite.Client.exe "$staging/tunnelite.exe"
-          else
-            cp publish/Tunnelite.Client "$staging/tunnelite"
-            chmod +x "$staging/tunnelite"
-          fi
-          cp LICENSE README.md "$staging/"
-
-      - name: Archive (tar.gz)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: tar -czf "dist/tunnelite-${{ matrix.rid }}.tar.gz" -C staging "tunnelite-${{ matrix.rid }}"
-
-      - name: Archive (zip)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: Compress-Archive -Path "staging/tunnelite-${{ matrix.rid }}" -DestinationPath "dist/tunnelite-${{ matrix.rid }}.zip"
-
-      - name: Smoke test
-        shell: bash
-        # Every RID in the matrix matches its runner, so the artifact can be run here.
-        run: |
-          set -euo pipefail
-          staging="staging/tunnelite-${{ matrix.rid }}"
-          if [ -f "$staging/tunnelite.exe" ]; then
-            "$staging/tunnelite.exe" --help
-          else
-            "$staging/tunnelite" --help
-          fi
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: tunnelite-${{ matrix.rid }}
-          path: dist/*
-          if-no-files-found: error
-
   release:
-    needs: build
-    # A manual run builds and uploads artifacts but publishes nothing.
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
+      - uses: actions/checkout@v4
+
+      # No setup-dotnet: the ubuntu-24.04 image already ships the 10.x SDK.
+
+      - name: Publish
+        run: |
+          set -euo pipefail
+          for rid in $RIDS; do
+            echo "::group::$rid"
+            # InvariantGlobalization keeps the binary from requiring ICU at runtime: without
+            # it a Linux build dies on any image that has no libicu installed. It is set here
+            # rather than in the csproj so the dotnet tool package keeps its current behaviour.
+            dotnet publish src/Tunnelite.Client \
+              -c Release -r "$rid" \
+              -p:PublishAot=true \
+              -p:InvariantGlobalization=true \
+              -o "publish/$rid"
+            echo "::endgroup::"
+          done
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for rid in $RIDS; do
+            staging="staging/tunnelite-$rid"
+            mkdir -p "$staging"
+            # The binary is renamed rather than built as "tunnelite": passing -p:AssemblyName
+            # to the publish makes the AOT link fail with
+            # "Failed to load type 'Tunnelite.Sdk.ITunnelClient'".
+            if [ -f "publish/$rid/Tunnelite.Client.exe" ]; then
+              cp "publish/$rid/Tunnelite.Client.exe" "$staging/tunnelite.exe"
+            else
+              cp "publish/$rid/Tunnelite.Client" "$staging/tunnelite"
+              chmod +x "$staging/tunnelite"
+            fi
+            cp LICENSE README.md "$staging/"
+
+            case "$rid" in
+              win-*) (cd staging && zip -qr "../dist/tunnelite-$rid.zip" "tunnelite-$rid") ;;
+              *)     tar -czf "dist/tunnelite-$rid.tar.gz" -C staging "tunnelite-$rid" ;;
+            esac
+          done
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          # Only the runner's own RID can be executed directly; the musl build gets a container.
+          ./staging/tunnelite-linux-x64/tunnelite --help
+          docker run --rm -v "$PWD/staging/tunnelite-linux-musl-x64:/app:ro" alpine:3 /app/tunnelite --help
+          file dist/* staging/*/tunnelite*
 
       - name: Checksums
-        shell: bash
         run: |
           set -euo pipefail
           cd dist
           sha256sum tunnelite-* > SHA256SUMS
           cat SHA256SUMS
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tunnelite-binaries
+          path: dist/*
+          if-no-files-found: error
+
       - name: Publish release
-        shell: bash
+        # A manual run builds and uploads artifacts but publishes nothing.
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
